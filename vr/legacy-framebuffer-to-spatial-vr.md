@@ -325,6 +325,25 @@ atlas, and scroll record, hash it, and compare it with the layer drawn by the
 native renderer. This catches off-by-one rows, wrap errors, stale maps, and
 incorrect sub-tile offsets before a headset is involved.
 
+## Reset temporal presentation state at boundaries
+
+Interpolation buffers, apron ghosts, prior runs, pairing tables, and cached
+sheet cells are all histories of one presentation timeline. They must not
+survive a level, episode, asset-sheet, or game-mode boundary.
+
+Export enough identity to recognize a discontinuity: a sheet or level epoch,
+episode and mode IDs, plus a monotonic gameplay tick. Before rotating current
+cells into the previous-frame buffer, clear every temporal cache when an epoch
+or mode changes, or when the tick moves backwards. Clearing only the most
+obvious ghost list is insufficient if it can immediately be reseeded from a
+previous-mode cell buffer.
+
+Test transitions, not just cold starts. Menu to story, arcade to story, level
+restart, episode change, and return to title can each expose stale sprites that
+never existed in the new simulation state. A raw tick-one record dump is a
+useful discriminator: if the alleged object is absent from the native records,
+the bug belongs to retained presentation history.
+
 ## Treat de-parallax as a gameplay migration
 
 Old games often fake depth by moving background layers opposite the player's
@@ -348,6 +367,13 @@ A staged approach is safer:
 3. Document visual-versus-hitbox discrepancies this creates.
 4. Add a native simulation mode that pins parallax and widens affected bounds.
 5. Verify that mode independently with deterministic tests.
+
+After an intentional simulation change, determinism and equivalence are
+different claims. The modified game can remain perfectly deterministic while
+no longer matching the upstream game's per-tick hashes. Version the new mode,
+establish a new golden baseline, and state clearly which configurations are
+expected to match upstream. Do not describe a migrated mode as tick-for-tick
+equivalent merely because its own replays are repeatable.
 
 If correcting a curved projectile only in the renderer would move it away from
 its real hitbox, leave the visible curve until the simulation migration is
@@ -428,6 +454,28 @@ elevated platform. Give decals a small real geometric lift when coplanar depth
 bias behaves differently under multiview; verify that the lift remains
 imperceptible from normal play angles.
 
+“Under platform” is an occlusion relationship, not a single global draw layer.
+An enemy hanging from a rail may need its upper pixels hidden by the rail while
+its lower body remains visible. Preserve the platform's real occupied shape and
+compare sprite fragments against it, or split the sprite at the surface. A
+single center-point height test will make partly occluded objects pop wholly in
+front of or behind the platform.
+
+## Put first-run VR onboarding before game startup
+
+A legacy game may enter its own blocking menu loop as soon as the native
+session starts. If players need recentering guidance, controller-ray selection,
+or a safe controls tutorial, gate native startup until onboarding completes or
+is skipped.
+
+The first panel should be readable at the player's expected eye height even
+when the initial origin is wrong. Explain the recenter action there, accept
+laser input from either controller, and keep later tutorial panels clear of the
+play area. Teach spatial controls through observable consequences: let the
+real ship pursue the hand target at its actual game speed, require full-range
+movement, and respawn a missed practice pickup until success. Persist completion
+but retain a developer override for replaying the tutorial.
+
 ## Build diagnostics around exact frames
 
 Headset-only bugs are common. Make reports reproducible without relying on
@@ -447,6 +495,28 @@ Useful tools include:
 Save the frame number, gameplay tick, active modes, and relevant entity IDs
 with every capture. “The third purple enemy looked transparent” becomes much
 easier to solve when it means “demo frame 18420, entity type 73, source 19.”
+
+Do not treat a non-XR editor run as proof of PCVR behavior. Exercise the exported
+binary through a real OpenXR runtime and test mode transitions in the headset.
+A recording captured by a standalone headset may still depict the streamed
+PCVR application, so identify the executing build and runtime rather than
+inferring the platform from the capture device.
+
+## Build releases from one exact source state
+
+Make desktop and standalone-headset packages identify the same clean commit.
+Write the commit, version, dirty flag, build time, and signing identity into a
+small build record; generate adjacent SHA-256 files; inspect the final ZIP and
+APK rather than trusting staging directories; and verify the APK with the
+platform signing tool. Use a persistent release key for sideloaded Android
+builds so upgrades preserve package identity.
+
+Documentation bundled inside an archive is part of the artifact. If install or
+playtesting instructions change during release review, rebuild the affected
+package instead of updating only the repository page. A private repository and
+draft prerelease provide a useful final review surface. Publish the prerelease
+before changing repository visibility so source and downloads can become
+public together.
 
 ## A phased conversion plan
 
@@ -496,10 +566,12 @@ easier to solve when it means “demo frame 18420, entity type 73, source 19.”
 | Hosted replay diverges | Input or timing applied at a different point | Per-tick hashes against the standalone path |
 | Spatial layer scrolls one row off | Map wrap or sub-tile offset reconstructed incorrectly | Standalone layer raster hashes |
 | Shots look straight but collide elsewhere | Visual de-parallax changed presentation only | Migrate coupled simulation rules or preserve the artifact |
+| Old enemies appear on tick one of a new mode | Previous cells or ghosts survived a presentation epoch | Reset all temporal caches before rotating frame buffers |
 | Effects smear across the screen | Short-lived pool slots paired as stable identities | Generations and category-specific interpolation policy |
 | Sprite turns translucent only in-headset | Packed instance flags interpolated in multiview | Flat varyings and rounded discrete decoding |
 | Hairlines appear on composed sprites | `fract` wrapped extrapolated edge UVs | Clamp quadrant UVs |
 | Ground object ghosts over platforms | Coplanar or incorrectly classified depth | Pixel-aware surface query and small geometric lift |
+| Hanging object is wholly above or below a rail | Under-platform treated as one global layer | Fragment- or occupancy-aware partial occlusion |
 | Fallback frame becomes white or opaque | Suppression color is also affected by palette animation | Explicit opacity/key plane and transition tests |
 
 ## Safe-extension checklist
@@ -515,9 +587,10 @@ When spatializing another legacy draw category:
 7. Render the category spatially with suppression disabled.
 8. Enable category suppression and inspect the residual framebuffer.
 9. Run the deterministic state-hash gate.
-10. Test both flat rendering and headset multiview.
-11. Add a forced fallback for unsupported effects.
-12. Capture exact frames for any remaining visual discrepancy.
+10. Reset temporal caches and test entry from every adjacent mode.
+11. Test flat rendering, an exported PCVR build, and headset multiview.
+12. Add a forced fallback for unsupported effects.
+13. Capture exact frames for any remaining visual discrepancy.
 
 The result is a sequence of working products rather than one long rewrite. The
 original game remains playable at every phase; the framebuffer provides
