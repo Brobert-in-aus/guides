@@ -357,6 +357,53 @@ drained after every simulated tick.
 Keep static session metadata separate as well: map dimensions, terrain seed,
 tileset IDs, level identity, or asset-pack selection can often be queried once.
 
+## Give terminal UI explicit ownership
+
+A terminal simulation flag and a visible results panel are different states.
+Define who owns ticking, input, audio, and rendering during every transition:
+
+```text
+live play -> death animation -> name entry/results -> route or restart
+   tick            tick               frozen
+   input           neutral            panel only
+   events          drained            no gameplay events
+```
+
+This prevents a subtle VR failure: the frontend hides the player and presents
+the score screen while the simulation continues underneath it. Enemies can keep
+attacking the hidden corpse, positional hit sounds continue, and a second death
+cue may play even though the run has already ended.
+
+Use one ordered screen-ownership decision near the start of the host frame. A
+modal first-run prompt, fatal error, name-entry keyboard, or results panel should
+either stop simulation advancement or explicitly define the limited cinematic
+updates that remain allowed. Do not rely only on input suppression; neutral
+input does not stop AI, collisions, timers, or one-shot audio.
+
+Keep the death cinematic separate from results ownership. It may be desirable
+for the world and corpse animation to tick for a short pacing window. At the
+handoff to results, capture the final score and statistics, drain the last
+intended events, then freeze the simulation until the player chooses a route.
+
+Test terminal paths that bypass ordinary damage. Perks, scripts, timers, debug
+commands, disconnects, and quest rules may set health or outcome state directly
+without producing the normal damage event or death sound. Prefer a canonical
+simulation event or transition record; if presentation supplies a fallback cue,
+deduplicate it against recent native events.
+
+The regression matrix should include:
+
+- ordinary lethal damage;
+- direct perk or script death;
+- death with pending level-up choices;
+- pause opened immediately before death;
+- ranked and unranked score paths;
+- quest success and failure panels; and
+- network terminal state with late packets or reconnect activity.
+
+For each case, assert both the visible route and the absence of post-panel
+gameplay events.
+
 ## Use flat, reusable snapshot buffers
 
 Copying thousands of entities into individual managed objects every tick creates
@@ -508,6 +555,7 @@ libraries are present under the correct `lib/<abi>/` directory.
 | Replays diverge | Godot duplicated rules, used variable delta, or a read consumed RNG | Single simulation owner and replay gate |
 | Movement feels wrong | Target point confused with direction or velocity | Document field semantics and test mapper math |
 | Audio or decals disappear | One-shot events were sampled like persistent state | Drain events after every tick |
+| Enemies attack beneath the results panel | Terminal UI suppressed input but did not own simulation ticking | Freeze at the cinematic-to-results handoff |
 | Entities interpolate into unrelated spawns | Pool slots reused without generations | Stable `(slot, generation)` identities |
 | Headset stutters at match end | Replay/save encoding performed synchronously | Detach ownership and process on a worker |
 | Desktop works but headset cannot load native code | Wrong ABI, libc, APK location, or stripped exports | Inspect and preflight the final package |
